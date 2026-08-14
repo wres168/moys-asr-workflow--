@@ -459,7 +459,7 @@
         guiLang: saved.guiLang,
         showRareLangs: saved.showRareLangs || false,
         s2tMode: saved.s2tMode || "off",
-        appVersion: "1.4.0-beta.4",
+        appVersion: "1.4.0-beta.5",
         stickerDir: saved.stickerDir || "",
         postprocessProviders: [
           { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", reasoningMode: "off", maskedApiKey: "", selected: true },
@@ -571,7 +571,8 @@
       stop_server: async () => ({ ok: true }),
       start_transcription: async () => { setTimeout(() => window.MAWLauncher.onBackendEvent({ type: "log", message: "[mock] 上传完成" }), 250); setTimeout(() => window.MAWLauncher.onBackendEvent({ type: "done", result: { srtPath: "D:\\Demo\\clip.srt", jsonPath: "D:\\Demo\\clip.json", htmlPath: "D:\\Demo\\clip.edit.html" } }), 900); return { ok: true }; },
       open_output_folder: async () => ({ ok: true }),
-      open_html: async () => ({ ok: true })
+      open_html: async () => ({ ok: true }),
+      get_emoji_font_path: async () => ({ ok: true, path: "" })
     };
   }
 
@@ -633,6 +634,16 @@
   function setTheme(pref) { state.theme = pref; try { localStorage.setItem(THEME_KEY, pref); } catch (error) { /* localStorage 不可用时仅作用于本次会话 */ } applyTheme(); }
   function renderS2tMode() { [["off", "s2tOff"], ["taiwan", "s2tTaiwan"], ["standard", "s2tStandard"]].forEach(([mode, id]) => $(id).classList.toggle("active", state.s2tMode === mode)); }
   async function setS2tMode(mode) { state.s2tMode = mode; renderS2tMode(); const result = await bridge("save_prefs", { s2tMode: mode }); if (result.ok) { state.config.s2tMode = mode; setStatus(t("saved")); } else applyErrorResult(result); }
+
+  // keycap 表情（1️⃣ 等）依赖彩色 emoji 字体：后端把 Noto Color Emoji 缓存到本机
+  // 后提供 file:// URI，这里注入 @font-face；注入一次即可，重复事件会被跳过。
+  function injectEmojiFont(uri) {
+    if (!uri || document.querySelector("style[data-emoji-font]")) return;
+    const style = document.createElement("style");
+    style.dataset.emojiFont = "1";
+    style.textContent = `@font-face{font-family:"MAW Emoji";src:url("${uri}") format("truetype");font-weight:400;font-display:swap;}`;
+    document.head.appendChild(style);
+  }
 
   async function bridge(method, payload = {}) {
     try {
@@ -887,6 +898,8 @@
     window.MAWLauncher.config = state.config;
     state.s2tMode = ["taiwan", "standard"].includes(state.config.s2tMode) ? state.config.s2tMode : "off";
     renderS2tMode();
+    const emojiFont = await bridge("get_emoji_font_path");
+    if (emojiFont && emojiFont.ok && emojiFont.path) injectEmojiFont(emojiFont.path);
     state.lang = state.config.guiLang || "zh";
     fillSelect("provider", state.config.providers, state.config.providerId || "qwen");
     applyProvider(false);
@@ -896,6 +909,7 @@
   }
 
   function handleBackendEvent(event) {
+    if (event.type === "emojiFontReady" && event.path) injectEmojiFont(event.path);
     if (event.type === "log") appendLog(event.message);
     if (event.type === "postprocess_status") window.MAWLauncher?.onPostprocessStatus?.(event);
     if (event.type === "postprocess_stream") window.MAWLauncher?.onPostprocessStream?.(event);

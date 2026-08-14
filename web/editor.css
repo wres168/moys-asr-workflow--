@@ -661,7 +661,8 @@
      额外固定高度、单行不换行 + 横向滚动，避免与波形 scroll 的 padding 错位。 */
   .toolbar.player-toolbar,
   .toolbar.cue-list-toolbar,
-  .toolbar.waveform-toolbar {
+  .toolbar.waveform-toolbar,
+  .toolbar.cue-editor-toolbar {
     height: var(--panel-toolbar-h);
     margin: 0;
     padding: 6px 8px;
@@ -676,22 +677,131 @@
   }
   .toolbar.player-toolbar > *,
   .toolbar.cue-list-toolbar > *,
-  .toolbar.waveform-toolbar > * { flex: 0 0 auto; }
+  .toolbar.waveform-toolbar > *,
+  .toolbar.cue-editor-toolbar > * { flex: 0 0 auto; }
   .toolbar.cue-list-toolbar .input-clear input[type=text] { min-width: 140px; width: 20ch; }
-  .subtitle-preview-settings {
+  .settings-anchor {
     display: inline-flex; align-items: center;
+    order: 99; margin-left: auto;
   }
-  .toolbar .subtitle-preview-settings-toggle {
+  .toolbar .settings-anchor > button {
     min-width: 30px; padding: 3px 7px; font-size: 14px; line-height: 1;
   }
-  .subtitle-preview-settings-panel {
-    position: fixed; z-index: 260;
-    display: grid; gap: 8px; width: min(320px, calc(100vw - 16px));
-    padding: 9px 10px;
+  .toolbar .settings-anchor > button.active {
+    position: relative; z-index: 421;
+  }
+  .settings-panel {
+    position: fixed; z-index: 420;
+    display: flex; flex-direction: column; gap: 12px;
+    width: min(360px, calc(100vw - 16px)); max-height: min(560px, calc(100vh - 16px));
+    padding: 10px; overflow-y: auto;
     background: var(--bg-overlay); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md); box-shadow: var(--shadow-3);
   }
-  .subtitle-preview-settings-panel[hidden] { display: none; }
+  .settings-panel[hidden] { display: none; }
+  .settings-panel-owner-open {
+    position: relative; z-index: 80;
+  }
+  .settings-panel-section {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    min-width: 0; padding: 8px 10px;
+    background: var(--bg-raised); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .settings-panel-title {
+    flex: 0 0 100%; color: var(--text-secondary); font-size: 12px; font-weight: 600;
+    letter-spacing: .08em; text-align: center;
+  }
+  .settings-panel-item {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-secondary); font-size: 12px;
+  }
+  .settings-panel-item[hidden] { display: none; }
+  .settings-panel-field {
+    display: flex; flex: 0 0 100%; flex-direction: column; align-items: flex-start; gap: 3px;
+    min-width: 0;
+  }
+  .settings-panel-hint {
+    flex: 0 0 100%; margin: 0; color: var(--text-muted); font-size: 10px; line-height: 1.35;
+  }
+  .settings-panel-section select {
+    background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px; cursor: pointer;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  }
+  .settings-panel-section select:focus {
+    outline: none; border-color: var(--accent); box-shadow: var(--focus-ring);
+  }
+  .settings-panel-section select:disabled { opacity: .42; cursor: not-allowed; }
+  .settings-panel-section input[type="text"],
+  .settings-panel-section input[type="number"] {
+    background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 6px; min-height: var(--control-h);
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  }
+  .settings-panel-section input[type="text"]:focus,
+  .settings-panel-section input[type="number"]:focus {
+    outline: none; border-color: var(--accent); box-shadow: var(--focus-ring);
+  }
+  .settings-panel-section button {
+    min-width: 26px; padding: 3px 7px; color: var(--btn-text); background: var(--btn-bg);
+    border: 1px solid var(--btn-border); border-radius: var(--radius-sm); font-size: 13px; cursor: pointer;
+  }
+  .settings-panel-section button:hover:not(:disabled) {
+    background: var(--btn-bg-hover); border-color: var(--btn-border-hover);
+  }
+  .settings-panel-section button:focus-visible {
+    outline: 2px solid var(--accent-line); outline-offset: 1px;
+  }
+  .settings-panel-section button:disabled { opacity: .42; cursor: not-allowed; }
+  .subtitle-preview-settings-panel { width: min(400px, calc(100vw - 16px)); }
+  .cue-list-settings-panel { width: min(340px, calc(100vw - 16px)); }
+  .cue-editor-settings-panel { width: min(300px, calc(100vw - 16px)); }
+  .subtitle-preview-settings-fields {
+    display: grid; gap: 8px; width: 100%; min-width: 0;
+  }
+  .subtitle-preview-settings-section { display: block; }
+  .cue-list-settings-section,
+  .cue-editor-settings-section { display: grid; }
+  .cue-list-setting-row input[type="number"] {
+    width: 7em; min-width: 0; box-sizing: border-box;
+  }
+  .cue-list-settings-display-group {
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .cue-list-settings-display-group .settings-panel-item {
+    white-space: nowrap;
+  }
+  .cue-editor-settings-display-group {
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .cue-editor-settings-display-group .settings-panel-item {
+    white-space: nowrap;
+  }
+  .waveform-settings-section { width: 100%; }
+  .waveform-settings-title { text-transform: none; }
+  .waveform-settings-section .editor-settings-item {
+    flex: 0 0 auto; color: var(--text-secondary); font-size: 12px;
+  }
+  .waveform-settings-section select {
+    background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px; cursor: pointer;
+  }
+  .waveform-settings-section select:focus {
+    outline: none; border-color: var(--accent); box-shadow: var(--focus-ring);
+  }
+  .waveform-settings-section select:disabled { opacity: .42; cursor: not-allowed; }
+  .waveform-settings-section button {
+    min-width: 26px; padding: 3px 7px; color: var(--btn-text); background: var(--btn-bg);
+    border: 1px solid var(--btn-border); border-radius: var(--radius-sm); font-size: 13px; cursor: pointer;
+  }
+  .waveform-settings-section button:hover:not(:disabled) {
+    background: var(--btn-bg-hover); border-color: var(--btn-border-hover);
+  }
+  .waveform-settings-section button:focus-visible {
+    outline: 2px solid var(--accent-line); outline-offset: 1px;
+  }
+  .waveform-settings-section button:disabled { opacity: .42; cursor: not-allowed; }
   .subtitle-preview-setting-row {
     display: grid; grid-template-columns: 5em minmax(0, 1fr); align-items: center; gap: 8px;
     color: var(--text-secondary); font-size: 12px; white-space: nowrap;
@@ -758,15 +868,21 @@
   .editor-settings-field > label.toggle.editor-settings-item { align-self: stretch; width: 100%; }
   .editor-settings-field > .editor-settings-hint { margin: 0; }
   .editor-settings-list-fields { flex-wrap: wrap; }
-  .editor-settings-display-row { flex: 0 0 100%; flex-wrap: nowrap; align-items: flex-start; }
   .editor-settings-list-fields > span { color: var(--text-muted); }
-  .editor-settings-display-row > span,
   .editor-settings-toggle-group > .toggle { white-space: nowrap; }
   /* 显示开关分组：空间够时与标题同行，不够时整组折到下一行，组内按宽度继续换行。 */
   .editor-settings-toggle-group {
     display: inline-flex; flex-wrap: wrap; align-items: center;
     gap: 3px 12px; flex: 1 1 auto; min-width: 140px;
   }
+  .editor-settings-toggle-group > .editor-settings-hint {
+    flex: 0 0 100%; margin-top: 2px;
+  }
+  .ninja-toggle-group {
+    display: grid; grid-template-columns: max-content max-content;
+    flex: 0 0 100%; gap: 3px 12px; align-items: center;
+  }
+  .ninja-toggle-group > .editor-settings-hint { grid-column: 1 / -1; }
   .editor-settings-panel select {
     background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px; cursor: pointer;
@@ -803,7 +919,6 @@
     .editor-settings-panel { grid-template-columns: 1fr; }
   }
   @media (max-width: 420px) {
-    .editor-settings-display-row { gap: 3px; font-size: 11px; }
     .editor-settings-toggle-group > .toggle { gap: 2px; }
   }
 
@@ -1104,6 +1219,18 @@
     background: var(--bg-panel);
     border: 1px solid var(--border-subtle); border-left: 3px solid var(--amber); border-radius: var(--radius-md);
     box-shadow: var(--shadow-2);
+  }
+  .current-cue-panel > .cue-editor-toolbar {
+    height: var(--panel-toolbar-h);
+    margin: -10px -12px 10px;
+    padding: 6px 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    align-items: center;
+    background: var(--panel-toolbar-bg);
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: 0 1px 0 var(--panel-toolbar-shadow);
   }
   .cue-panel-layout {
     display: grid; width: 100%; min-width: 0;
@@ -1500,6 +1627,12 @@
     display: grid; gap: 3px; margin: 9px 0 7px; padding: 8px 10px;
     border-left: 3px solid var(--accent); border-radius: var(--radius-sm);
     background: var(--accent-tint); color: var(--text-secondary); font-size: 12px;
+    line-height: 1.5;
+  }
+  .multi-subtitle-split-timestamp-hint {
+    margin: 8px 0 7px; padding: 7px 10px;
+    border-left: 3px solid var(--amber-hover); border-radius: var(--radius-sm);
+    background: var(--amber-tint); color: var(--text-secondary); font-size: 12px;
     line-height: 1.5;
   }
   .multi-subtitle-split-lane { display: grid; gap: 5px; margin-top: 10px; }
@@ -1908,69 +2041,52 @@
 
   /* === 字幕忍者刀光 ===
      全屏层只在拆分成功且用户开启特效时短暂存在，不捕获指针事件。
-     ::before 是扫过的锋利刃光，::after 是刃光经过后短暂滞留的发光切痕；
-     角度、方向、时长、高度与色调全部由 JS 在触发时随机写入 CSS 变量。 */
+     刀光以实际拆分点为中心，采用纵向渐变细线；位置、角度与时长由 JS 在触发时写入。 */
   #ninja-slash-flash {
     position: fixed; inset: 0; z-index: 1000; overflow: hidden;
     pointer-events: none; visibility: hidden; opacity: 0;
     /* JS 未写入变量时的兜底默认值。 */
-    --slash-angle: 22deg;
-    --slash-from: -125vw;
-    --slash-to: 160vw;
-    --slash-dur: 220ms;
-    --slash-linger: 200ms;
+    --slash-angle: 12deg;
+    --slash-dur: 210ms;
+    --slash-linger: 120ms;
+    --slash-x: 50%;
     --slash-y: 50%;
-    --slash-tint: 200;
+    --slash-height: 190%;
   }
-  /* 刃光：细窄高亮刃芯 + 青色辉光，不再使用大半径模糊。 */
-  #ninja-slash-flash::before {
-    content: ""; position: absolute; left: 0;
-    top: calc(var(--slash-y) - 95%);
-    width: 3px; height: 190%;
-    background: linear-gradient(90deg,
-      transparent 0%,
-      hsl(var(--slash-tint) 100% 78% / 0.55) 28%,
-      #ffffff 50%,
-      hsl(var(--slash-tint) 100% 78% / 0.55) 72%,
-      transparent 100%);
-    box-shadow:
-      0 0 10px 1px hsl(var(--slash-tint) 100% 72% / 0.65),
-      0 0 30px 5px hsl(var(--slash-tint) 100% 66% / 0.35);
+  /* 锋利刃芯：参考横向渐变线改为纵向，边缘淡出，中段保持纯白。 */
+  #ninja-slash-flash::before,
+  #ninja-slash-flash::after {
+    content: ""; position: absolute;
+    top: var(--slash-y); left: var(--slash-x);
+    width: 3px; height: var(--slash-height);
+    background: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 1) 15%,
+      rgba(255, 255, 255, 1) 80%,
+      rgba(255, 255, 255, 0) 100%);
+    transform: translate(-50%, -50%) rotate(var(--slash-angle));
+    transform-origin: center;
     opacity: 0;
-    transform: translateX(var(--slash-from)) rotate(var(--slash-angle));
     will-change: transform, opacity;
   }
-  /* 切痕：与刃光同角度、同高度的全屏细发线，刃光扫过后闪现并滞留。 */
-  #ninja-slash-flash::after {
-    content: ""; position: absolute; left: 50%; margin-left: -1px;
-    top: calc(var(--slash-y) - 100%);
-    width: 2px; height: 200%;
-    background: linear-gradient(90deg,
-      transparent 0%,
-      hsl(var(--slash-tint) 100% 80% / 0.6) 30%,
-      #ffffff 50%,
-      hsl(var(--slash-tint) 100% 80% / 0.6) 70%,
-      transparent 100%);
+  #ninja-slash-flash::before {
     box-shadow:
-      0 0 8px 1px hsl(var(--slash-tint) 100% 75% / 0.5),
-      0 0 22px 4px hsl(var(--slash-tint) 100% 70% / 0.28);
-    opacity: 0;
-    transform: rotate(var(--slash-angle));
+      0 0 7px 1px rgba(255, 255, 255, 0.58),
+      0 0 20px 3px rgba(255, 255, 255, 0.24);
   }
-  /* 不再有全屏白纱；只在斩击中心留一团很快熄灭的微弱径向闪光。 */
+  #ninja-slash-flash::after {
+    width: 12px;
+    filter: blur(4px);
+  }
   #ninja-slash-flash.show {
     visibility: visible;
-    background: radial-gradient(ellipse 46% 22% at 50% var(--slash-y),
-      hsl(var(--slash-tint) 100% 88% / 0.09), transparent 72%);
     animation: ninja-slash-flash-in calc(var(--slash-dur) + var(--slash-linger) + 60ms) linear forwards;
   }
   #ninja-slash-flash.show::before {
-    animation: ninja-slash-beam var(--slash-dur) cubic-bezier(.2,.7,.25,1) forwards;
+    animation: ninja-slash-beam var(--slash-dur) ease-out forwards;
   }
-  /* 切痕在刃光扫到约四成处亮起，随后在滞留期内淡去。 */
   #ninja-slash-flash.show::after {
-    animation: ninja-slash-cut calc(var(--slash-linger) + 60ms) ease-out forwards;
-    animation-delay: calc(var(--slash-dur) * 0.38);
+    animation: ninja-slash-glow calc(var(--slash-dur) + var(--slash-linger)) ease-out forwards;
   }
   @keyframes ninja-slash-flash-in {
     0% { opacity: 0; }
@@ -1979,20 +2095,21 @@
     100% { opacity: 0; visibility: hidden; }
   }
   @keyframes ninja-slash-beam {
-    0% { opacity: 0; transform: translateX(var(--slash-from)) rotate(var(--slash-angle)); }
-    12% { opacity: 1; }
-    82% { opacity: 1; }
-    100% { opacity: 0; transform: translateX(var(--slash-to)) rotate(var(--slash-angle)); }
-  }
-  @keyframes ninja-slash-cut {
     0% { opacity: 0; }
-    16% { opacity: 1; }
+    14% { opacity: 0.95; }
+    68% { opacity: 0.95; }
+    100% { opacity: 0; }
+  }
+  @keyframes ninja-slash-glow {
+    0% { opacity: 0; }
+    14% { opacity: 0.38; }
+    58% { opacity: 0.26; }
     100% { opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     #ninja-slash-flash.show { animation-duration: 90ms; }
     #ninja-slash-flash.show::before { animation-duration: 90ms; }
-    #ninja-slash-flash.show::after { animation-duration: 60ms; animation-delay: 0ms; }
+    #ninja-slash-flash.show::after { animation-duration: 60ms; }
   }
   .hint-project-header { display: flex; align-items: center; gap: 10px; }
   .hint-project-header strong { flex: 1 1 auto; color: var(--red-hover); font-size: 15px; }

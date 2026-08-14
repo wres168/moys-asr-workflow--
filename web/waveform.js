@@ -2345,6 +2345,7 @@
       });
       row.addEventListener('dblclick', (event) => {
         if (event.target.closest('.waveform-cue-block, .waveform-gap-block')) return;
+        if (event.ctrlKey || event.metaKey) return;
         event.preventDefault();
         this.options.togglePlayback();
       });
@@ -2501,7 +2502,8 @@
         block.addEventListener('dblclick', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          this.options.togglePlayback();
+          if (event.ctrlKey || event.metaKey) return;
+          this.options.activateCue?.(index);
         });
         row.appendChild(block);
       });
@@ -2551,7 +2553,8 @@
         block.addEventListener('dblclick', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          this.options.togglePlayback();
+          if (event.ctrlKey || event.metaKey) return;
+          this.options.activateExtensionCue?.(index);
         });
         row.appendChild(block);
       });
@@ -2988,7 +2991,7 @@
       return Number.isFinite(boundary) ? boundary : requestedMs;
     }
 
-    beginBlockedCueCreateDrag(event, index) {
+    beginBlockedCueCreateDrag(event, index, track = 'main') {
       const target = event.currentTarget;
       const pointerId = event.pointerId;
       const startX = event.clientX;
@@ -3015,7 +3018,10 @@
       const onUp = () => {
         if (finished) return;
         cleanup();
-        if (!moved) this.options.toggleCueSelection?.(index);
+        if (!moved) {
+          if (track === 'extension') this.options.toggleExtensionSelection?.(index);
+          else this.options.toggleCueSelection?.(index);
+        }
       };
       const onCancel = () => cleanup();
       window.addEventListener('pointermove', onMove);
@@ -3061,6 +3067,33 @@
         marker._hideTimer = 0;
       }, SPLIT_FLASH_DURATION_MS);
       return true;
+    }
+
+    // 返回波形字幕切点的屏幕坐标，供全屏反馈动画把中心落在实际切分位置。
+    getSplitPointAtTime(timeMs, track = 'main') {
+      if (!Number.isFinite(timeMs)) return null;
+      const rows = [...this.content.querySelectorAll('.waveform-row')];
+      const row = rows.find((candidate) => {
+        const startMs = Number(candidate.dataset.startMs);
+        const endMs = Number(candidate.dataset.endMs);
+        return timeMs >= startMs && timeMs <= endMs;
+      });
+      if (!row) return null;
+      const rowStart = Number(row.dataset.startMs);
+      const rowEnd = Number(row.dataset.endMs);
+      const rowRect = row.getBoundingClientRect();
+      const ratio = clamp((timeMs - rowStart) / Math.max(1, rowEnd - rowStart), 0, 1);
+      const selector = `.waveform-cue-block[data-track="${track === 'extension' ? 'extension' : 'main'}"]`;
+      const block = [...row.querySelectorAll(selector)].find((candidate) => {
+        const startMs = Number(candidate.dataset.start);
+        const endMs = Number(candidate.dataset.end);
+        return timeMs >= startMs && timeMs <= endMs;
+      });
+      const blockRect = block?.getBoundingClientRect?.();
+      return {
+        clientX: rowRect.left + rowRect.width * ratio,
+        clientY: blockRect ? blockRect.top + blockRect.height / 2 : rowRect.top + rowRect.height / 2,
+      };
     }
 
     // 屏幕坐标 -> 波形时间：命中某个波形行时返回该行内的时间（毫秒），否则返回 null。
@@ -3274,7 +3307,7 @@
       // Ctrl(Cmd)+点击字幕仍保留多选；只有真正移动形成拖动时才视为
       // “在已有字幕上创建”，并直接拒绝，不启动普通字幕拖动或创建预览。
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
-        return this.beginBlockedCueCreateDrag(event, index);
+        return this.beginBlockedCueCreateDrag(event, index, track);
       }
       // 剃刀工具：无修饰键左键点击字幕块（非手柄）时，在指针位置安全拆分。
       // 修饰键（Alt/Ctrl(Cmd)/Shift）仍走原行为，便于拆分后立即多选/禁用。
