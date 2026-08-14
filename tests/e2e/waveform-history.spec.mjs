@@ -711,11 +711,17 @@ test('help reflects the selected subtitle-edit split key', async ({ page }) => {
   const helpPanel = page.locator('#help-panel');
   await expect(helpPanel).toHaveClass(/show/);
   await expect(helpPanel).toHaveAttribute('aria-hidden', 'false');
+  await helpPanel.getByRole('tab', { name: '波形区', exact: true }).click();
 
   const settingsPanel = page.locator('#editor-settings-panel');
   const displayRows = settingsPanel.locator('.editor-settings-display-row');
   const splitKey = page.locator('#split-key');
   const helpSplitKey = page.locator('#help-split-key');
+  const editorSplitKey = page.locator('#cue-editor-split-key');
+  const editorConfirmKey = page.locator('#cue-editor-confirm-key');
+  await expect(page.locator('#cue-editor-key-hints')).toHaveClass(/waveform-status/);
+  await expect(page.locator('.cue-editor-key-hint')).toHaveCount(4);
+  await expect(page.locator('#cue-editor-key-hints')).toHaveCSS('gap', '14px');
   await expect(settingsPanel).not.toContainText('波形区拆分按键');
   await expect(displayRows).toHaveCount(0);
   const modKey = await page.evaluate(() => (
@@ -734,14 +740,18 @@ test('help reflects the selected subtitle-edit split key', async ({ page }) => {
   await expect(helpPanel).not.toContainText('普通点击以最后点击的轨道为准；未绑定副字幕不会保留旧主字幕选区');
 
   const multiSubtitleHelp = helpPanel.locator('.help-subgroup').filter({ hasText: '绑定到主副字幕（自动匹配）' });
-  await expect(multiSubtitleHelp.locator('.help-subtitle')).toHaveText('多重字幕');
   await expect(multiSubtitleHelp).toHaveCount(1);
+  await expect(helpPanel.locator('#help-tab-panel-waveform .help-title').filter({ hasText: '多重字幕' })).toHaveCount(1);
 
   await splitKey.selectOption('enter');
   await expect(helpSplitKey).toHaveText('Enter');
+  await expect(editorSplitKey).toHaveText('Enter');
+  await expect(editorConfirmKey).toHaveText('Ctrl+Enter');
 
   await splitKey.selectOption('ctrl-enter');
   await expect(helpSplitKey).toHaveText(`${modKey}+Enter`);
+  await expect(editorSplitKey).toHaveText(`${modKey}+Enter`);
+  await expect(editorConfirmKey).toHaveText('Enter');
 
   await page.keyboard.press('Escape');
   await expect(helpPanel).not.toHaveClass(/show/);
@@ -773,6 +783,48 @@ test('waveform toolbar exposes grouped icon controls and selected cues use a yel
   await cue.click();
   // 选中字幕块用 outline 高亮（不再改 border-color）
   await expect(cue).toHaveCSS('outline-color', 'rgb(255, 213, 74)');
+});
+
+test('extends selected subtitles without remapping items and undoes the batch in one step', async ({ page }) => {
+  await page.goto(server.url);
+  const cues = page.locator('.cue');
+  await cues.nth(0).click();
+  await page.keyboard.down('Control');
+  await cues.nth(1).click();
+  await page.keyboard.up('Control');
+  await expect(page.locator('.cue.selected')).toHaveCount(2);
+
+  const before = await page.evaluate(() => JSON.parse(JSON.stringify({
+    segments: DATA.segments.slice(0, 2),
+  })));
+  await page.locator('#subtitle-extend-manage').click();
+  await expect(page.locator('#subtitle-extend-panel')).toHaveClass(/show/);
+  await expect(page.locator('#subtitle-extend-forward-ms')).toHaveValue('250');
+  await expect(page.locator('#subtitle-extend-backward-ms')).toHaveValue('200');
+
+  await page.locator('#subtitle-extend-forward-ms').fill('-1');
+  await page.locator('#subtitle-extend-run').click();
+  await expect(page.locator('#hint-stack .hint-card.hint-invalid', {
+    hasText: '向前延长时长必须是大于等于 0 的数字',
+  })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => DATA.segments.slice(0, 2))).toEqual(before.segments);
+
+  await page.locator('#subtitle-extend-forward-ms').fill('250');
+  await page.locator('#subtitle-extend-run').click();
+  await expect.poll(() => page.evaluate(() => DATA.segments.slice(0, 2).map((segment) => ({
+    start: segment.start,
+    end: segment.end,
+    items: segment.items,
+  })))).toEqual([
+    { start: 0, end: 8200, items: before.segments[0].items },
+    { start: 49750, end: 58200, items: before.segments[1].items },
+  ]);
+  await expect(page.locator('#hint-stack .hint-card.hint-success', {
+    hasText: '已处理 2 个选中字幕：完整延长 1 条，部分延长 1 条，未延长 0 条',
+  })).toBeVisible();
+
+  await page.getByRole('button', { name: /撤销/ }).click();
+  await expect.poll(() => page.evaluate(() => DATA.segments.slice(0, 2))).toEqual(before.segments);
 });
 
 test('C merges a common group and Shift+A/D extends the subtitle selection', async ({ page }) => {

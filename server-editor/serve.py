@@ -74,8 +74,11 @@ class RecentProject:
     path: Path
     name: str
 
-    def to_json(self) -> dict[str, str]:
-        return {"path": str(self.path), "name": self.name}
+    def to_json(self) -> dict[str, object]:
+        payload: dict[str, object] = {"path": str(self.path), "name": self.name}
+        if not self.path.is_file():
+            payload["exists"] = False
+        return payload
 
 
 @dataclass(frozen=True)
@@ -623,7 +626,11 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self.update_settings()
         else:
-            self.send_error(HTTPStatus.NOT_FOUND, "未知 API")
+            self.send_localized_error(HTTPStatus.NOT_FOUND, "未知 API")
+
+    def send_localized_error(self, status: HTTPStatus, detail: str) -> None:
+        """Send a localized error body without putting non-Latin-1 text in the status line."""
+        super().send_error(status, status.phrase, detail)
 
     def shutdown_server(self) -> None:
         """Stop this loopback-only server from the MAW CLI."""
@@ -668,7 +675,10 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             if not isinstance(project_path, str) or not project_path:
                 raise RecentProjectError("工程路径格式不正确")
             project = self.editor_server.open_recent_project(project_path)
-        except (UnicodeDecodeError, json.JSONDecodeError, FileNotFoundError, ValueError, RecentProjectError) as error:
+        except FileNotFoundError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error), "missing": True})
+            return
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecentProjectError) as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error)})
             return
         except OSError as error:
@@ -790,27 +800,27 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             if media_path:
                 self.send_file(media_path, include_body)
             else:
-                self.send_error(HTTPStatus.NOT_FOUND, "没有预加载媒体")
+                self.send_localized_error(HTTPStatus.NOT_FOUND, "没有预加载媒体")
             return
         if path.startswith("/sfx/"):
             sfx_path = self.ninja_sfx_path(path[len("/sfx/"):])
             if sfx_path:
                 self.send_file(sfx_path, include_body)
             else:
-                self.send_error(HTTPStatus.NOT_FOUND, "刀光音效不存在")
+                self.send_localized_error(HTTPStatus.NOT_FOUND, "刀光音效不存在")
             return
         if path.startswith("/stickers/"):
             sticker_path = self.sticker_path(path[len("/stickers/"):])
             if sticker_path:
                 self.send_file(sticker_path, include_body)
             else:
-                self.send_error(HTTPStatus.NOT_FOUND, "表情包不存在")
+                self.send_localized_error(HTTPStatus.NOT_FOUND, "表情包不存在")
             return
         if path == "/favicon.ico":
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
             return
-        self.send_error(HTTPStatus.NOT_FOUND, "未知资源")
+        self.send_localized_error(HTTPStatus.NOT_FOUND, "未知资源")
 
     def send_json(self, status: HTTPStatus, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -849,7 +859,7 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             size = path.stat().st_size
             selected_range = parse_byte_range(self.headers.get("Range"), size)
         except FileNotFoundError:
-            self.send_error(HTTPStatus.NOT_FOUND, "文件不存在")
+            self.send_localized_error(HTTPStatus.NOT_FOUND, "文件不存在")
             return
         except ValueError:
             self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
@@ -871,12 +881,16 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
         with path.open("rb") as media_file:
             media_file.seek(start)
             remaining = length
-            while remaining:
-                chunk = media_file.read(min(128 * 1024, remaining))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                remaining -= len(chunk)
+            try:
+                while remaining:
+                    chunk = media_file.read(min(128 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                # Browser media elements commonly cancel an old Range request while seeking.
+                return
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"[http] {self.address_string()} - {format % args}")

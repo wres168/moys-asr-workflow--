@@ -70,6 +70,34 @@ class LocalEditorServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             server_editor.parse_byte_range("bytes=10-", 10)
 
+    def test_media_send_ignores_browser_cancelled_connections(self) -> None:
+        for disconnect in (BrokenPipeError(), ConnectionResetError(10054, "connection reset")):
+            with self.subTest(disconnect=type(disconnect).__name__):
+                handler = mock.Mock()
+                handler.headers = {}
+                handler.wfile.write.side_effect = disconnect
+                server_editor.EditorRequestHandler.send_file(handler, self.media, True)
+                handler.wfile.write.assert_called_once()
+
+    def test_unknown_resource_keeps_localized_detail_with_ascii_http_reason(self) -> None:
+        project = server_editor.load_project(
+            self.project_path, None, str(self.stickers), no_waveform=True, peaks_per_second=100,
+        )
+        with server_editor.EditorServer(("127.0.0.1", 0), project) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_address[1]}"
+                with self.assertRaises(urllib.error.HTTPError) as context:
+                    urllib.request.urlopen(f"{base_url}/.well-known/appspecific/com.chrome.devtools.json")
+                error = context.exception
+                self.assertEqual(error.code, 404)
+                self.assertEqual(error.reason, "Not Found")
+                self.assertIn("未知资源", error.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+
     def test_shutdown_endpoint_stops_the_loopback_server(self) -> None:
         project = server_editor.load_project(
             self.project_path, None, str(self.stickers), no_waveform=True, peaks_per_second=100,
@@ -237,8 +265,10 @@ class LocalEditorServerTests(unittest.TestCase):
             self.project_path, None, str(self.stickers), no_waveform=True, peaks_per_second=100,
         )
         settings_path = self.root / "server-editor-settings.json"
+        missing_project_path = self.root / "missing.json"
         settings = server_editor.remember_project(server_editor.ServerSettings(), self.project_path)
         settings = server_editor.remember_project(settings, self.other_project_path)
+        settings = server_editor.remember_project(settings, missing_project_path)
         with server_editor.EditorServer(
             ("127.0.0.1", 0),
             project,
@@ -299,9 +329,23 @@ class LocalEditorServerTests(unittest.TestCase):
                 status, result = post("/api/recent-projects/open", {"path": str(self.root / "unknown.json")})
                 self.assertEqual(status, 400)
                 self.assertFalse(result["ok"])
+
+                status, result = post("/api/recent-projects/open", {"path": str(missing_project_path)})
+                self.assertEqual(status, 400)
+                self.assertFalse(result["ok"])
+                self.assertTrue(result["missing"])
             finally:
                 server.shutdown()
                 thread.join(timeout=2)
+
+    def test_recent_project_payload_marks_missing_paths(self) -> None:
+        missing_project_path = self.root / "missing.json"
+        project = server_editor.load_project(
+            self.project_path, None, str(self.stickers), no_waveform=True, peaks_per_second=100,
+        )
+        settings = server_editor.remember_project(server_editor.ServerSettings(), missing_project_path)
+        page = server_editor.build_server_page(project, settings).decode("utf-8")
+        self.assertIn('"name": "missing.json", "exists": false', page)
 
     def test_saved_workspaces_are_persisted_and_reused_by_new_projects(self) -> None:
         project = server_editor.load_project(
