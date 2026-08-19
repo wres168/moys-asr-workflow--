@@ -51,6 +51,7 @@ desktop/src/index.html
 
 # Local post-processing configuration (may contain personal paths and settings).
 maw-postprocess.json
+start_gui.bat
 
 # AppImage 构建产物（scripts/build-appimage.sh）
 build-appimage/
