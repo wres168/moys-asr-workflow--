@@ -11,7 +11,7 @@
 页面功能（HTML 单文件）:
 - 嵌入媒体播放器，单击字幕跳转
 - 基础波形 / 多行波形，可拖动字幕块与边缘直接调整时间
-- 双击进入编辑（光标落在鼠标点击位置；Esc 取消，Enter/Ctrl+Enter 之一保存，另一个拆分）
+- 双击进入编辑（光标落在鼠标点击位置；Esc 默认保留改动，也可在 current-cue-panel 设置为取消；Enter/Ctrl+Enter 之一保存，另一个拆分）
 - 右键菜单：拆分 / 分配表情包 / 合并字幕（多选）/ 拓展表情包时间（多选）
 - 顶部搜索框过滤 + 高亮
 - 批量替换（被替换的行自动标 dirty）
@@ -45,7 +45,7 @@ VIDEO_EXTS = set(VIDEO_EXTENSIONS)
 AUDIO_EXTS = set(AUDIO_EXTENSIONS)
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 # Keep this aligned with pyproject.toml; release workflows synchronize it.
-BUNDLED_EDITOR_VERSION = "1.4.0-beta.7"
+BUNDLED_EDITOR_VERSION = "1.4.0"
 
 
 class Sticker(TypedDict):
@@ -364,13 +364,9 @@ def main():
         )
         if spectral is not None:
             data["spectral"] = spectral
-        else:
-            data.pop("spectral", None)
         reapeaks_wave = reapeaks.load_waveform_payload(media_path)
         if reapeaks_wave is not None:
             data["waveform_reapeaks"] = reapeaks_wave
-        else:
-            data.pop("waveform_reapeaks", None)
 
     output_path = Path(args.output).resolve() if args.output else \
         json_path.with_name(f"{json_path.stem}.edit.html")

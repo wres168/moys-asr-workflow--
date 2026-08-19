@@ -91,6 +91,7 @@ class CliTests(unittest.TestCase):
                 "--with-waveform",
                 "--s2t-mode",
                 "taiwan",
+                "--with-spectral",
             ]
         )
 
@@ -99,6 +100,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("--speaker-colors", generated)
         self.assertIn("--with-waveform", generated)
         self.assertEqual(generated[generated.index("--s2t-mode") + 1], "taiwan")
+        self.assertIn("--with-spectral", generated)
         self.assertEqual(
             [generated[index + 1] for index, value in enumerate(generated) if value == "--hotword"],
             ["Moy", "MAW"],

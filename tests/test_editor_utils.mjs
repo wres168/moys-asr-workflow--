@@ -14,6 +14,55 @@ vm.runInNewContext(i18nSource, i18nContext);
 const i18n = i18nContext.window.MAWE_I18N;
 
 
+test('maps exactly the approved preview font families in Chinese', () => {
+  const cases = [
+    ['Microsoft YaHei', '微软雅黑'],
+    ['Microsoft YaHei UI', '微软雅黑'],
+    ['SimHei', '黑体'],
+    ['SimSun', '宋体'],
+    ['NSimSun', '新宋体'],
+    ['FangSong', '仿宋'],
+    ['KaiTi', '楷体'],
+    ['PingFang SC', '苹方'],
+    ['Heiti SC', '黑体-简'],
+    ['Songti SC', '宋体-简'],
+    ['Kaiti SC', '楷体-简'],
+    ['Source Han Sans SC', '思源黑体'],
+    ['Source Han Serif SC', '思源宋体'],
+    ['Noto Sans CJK SC', 'Noto Sans CJK 简体中文'],
+    ['Noto Serif CJK SC', 'Noto Serif CJK 简体中文'],
+  ];
+  for (const [family, displayName] of cases) {
+    assert.equal(helpers.subtitleFontFamilyDisplayName(family, 'zh'), displayName);
+    assert.equal(helpers.subtitleFontFamilyDisplayName(family, 'en'), family);
+  }
+});
+
+
+test('leaves unknown and non-string preview font families unchanged', () => {
+  assert.equal(helpers.subtitleFontFamilyDisplayName('MAW Test Sans', 'zh'), 'MAW Test Sans');
+  assert.equal(helpers.subtitleFontFamilyDisplayName('Microsoft Yahei', 'zh'), 'Microsoft Yahei');
+  assert.equal(helpers.subtitleFontFamilyDisplayName(null, 'zh'), null);
+});
+
+test('normalizes and resolves keyboard operation references', () => {
+  assert.equal(helpers.normalizeKeyboardOperationReferenceMode('pointer'), 'pointer');
+  assert.equal(helpers.normalizeKeyboardOperationReferenceMode('playhead'), 'playhead');
+  assert.equal(helpers.normalizeKeyboardOperationReferenceMode('invalid'), 'pointer');
+  assert.deepEqual(JSON.parse(JSON.stringify(helpers.resolveKeyboardOperationReference('pointer', {
+    pointer: { timeMs: 2000, track: 'extension', trackId: 'secondary' },
+  }))), { timeMs: 2000, track: 'extension', trackId: 'secondary', source: 'pointer' });
+  assert.deepEqual(JSON.parse(JSON.stringify(helpers.resolveKeyboardOperationReference('playhead', {
+    pointer: { timeMs: 2000, track: 'main' },
+    playheadTarget: { kind: 'extension', timeMs: 6000, trackId: 'secondary' },
+  }))), { timeMs: 6000, track: 'extension', trackId: 'secondary', source: 'playhead' });
+  assert.deepEqual(JSON.parse(JSON.stringify(helpers.resolveKeyboardOperationReference('playhead', {
+    playheadTarget: { kind: 'main', timeMs: 6000 },
+  }))), { timeMs: 6000, track: 'main', trackId: null, source: 'playhead' });
+  assert.equal(helpers.resolveKeyboardOperationReference('pointer', { pointer: null }), null);
+});
+
+
 test('translates editor project controls and dynamic save messages to English', () => {
   assert.equal(i18n.translateText('保存工程', 'en'), 'Save project');
   assert.equal(i18n.translateText('自动打开上次工程', 'en'), 'Automatically open last project');
@@ -35,6 +84,24 @@ test('translates editor project controls and dynamic save messages to English', 
     'Replaced the binding for main subtitle 1 with extension subtitle 2',
   );
   assert.equal(i18n.translateText('保存工程', 'zh'), '保存工程');
+});
+
+
+test('translates adjacent adjustment and current-cue operation settings to English', () => {
+  assert.equal(i18n.translateText('字幕时间调整', 'en'), 'Subtitle timing adjustment');
+  assert.equal(i18n.translateText('自动吸附调整相邻字幕', 'en'), 'Automatically snap-adjust adjacent subtitles');
+  assert.equal(
+    i18n.translateText('开启后，拖动或微调同轨相邻字幕时默认保持联动；按住 Alt 临时解除。关闭后默认独立调整；按住 Alt 临时联动', 'en'),
+    'When enabled, dragging or fine-tuning adjacent cues on the same track links them by default; hold Alt to temporarily separate them. When disabled, they adjust independently by default; hold Alt to temporarily link them.',
+  );
+  assert.equal(
+    i18n.translateText('开启后，按 Esc 会恢复当前字幕编辑前的文本；关闭后按 Esc 保留文本改动并退出编辑', 'en'),
+    'When enabled, Esc restores the text from before editing; when disabled, Esc keeps text changes and exits editing.',
+  );
+  assert.equal(
+    i18n.translateText('关闭后按 Esc 保留文本改动；开启后恢复编辑前的文本。', 'en'),
+    'When disabled, Esc keeps text changes; when enabled, it restores the text from before editing.',
+  );
 });
 
 

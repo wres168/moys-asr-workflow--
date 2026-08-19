@@ -21,12 +21,15 @@ from pathlib import Path
 from threading import Event
 from typing import BinaryIO, Final, final
 
+from media_cache import embed_media_caches
+from waveform import is_waveform_payload
 from maw.gui_config import DEFAULT_ENV_PATH, DEFAULT_MODEL_ID, LANGUAGES, MODELS, PROVIDERS, REGIONS, ModelConfig, ProviderConfig, api_key_for_provider, effective_config, masked_secret, model_by_label, provider_by_id, provider_for_model, save_env
 from maw.gui_platform import apply_dark_title_bar, asset_path, creationflags, popen_process_tree, process_group_kwargs, release_process_tree, startupinfo, terminate_process_tree
 from maw.gui_workflow import TranscriptionProcessError, TranscriptionRequest, TranscriptionResult, _bundled_ffmpeg_directory, _child_environment, _ffmpeg_search_path, build_serve_command, default_srt_path, raw_response_path, run_transcription, unique_output_path, with_test_suffix
 from maw.local_runtime import LocalRuntimeCancelled, LocalRuntimeError, install_local_runtime, managed_runtime_status
 from maw.local_models import inspect_local_model, local_model_payload, prepare_local_model as prepare_model
 from maw.media import find_ffmpeg, resolve_project_media
+from maw.project import normalize_project
 from maw.postprocess import LlmPostprocessRequest, OutputMode, Replacement, ReplacementRequest, run_fixed_replacement as process_fixed_replacement, run_llm_postprocess as process_llm_postprocess
 from maw.postprocess_ffmpeg import FfconcatRequest, run_ffconcat_rebuild as process_ffconcat_rebuild
 from maw.postprocess_match import ScriptMatchRequest, run_script_match as process_script_match
@@ -47,6 +50,7 @@ from maw.postprocess_pipeline import (
 )
 from maw.postprocess_pipeline import PostprocessPipelineError
 from maw.ocr_runtime import OCR_MODEL_ID, OcrRuntimeCancelled, OcrRuntimeError, install_ocr_runtime, managed_ocr_runtime_status, ocr_model_type, ocr_models_payload, run_ocr_in_runtime
+from maw.project_preview import JsonValue
 from maw.soniox import SonioxContextError, build_soniox_context
 
 
@@ -57,8 +61,10 @@ WINDOW_TITLE = "MAW Launcher"
 MEDIA_EXTS: Final = frozenset({".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".ts", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg"})
 MOSE_REGISTRY_KEY = r"Software\Moy\MOSE"
 MOSE_FILE_TYPE = "Moy.MOSE.Project"
+# 工程恢复会同步准备自研波形；大型工程可能需要超过默认的网络探测窗口。
+SERVER_START_TIMEOUT: Final = 30.0
 # Keep this aligned with pyproject.toml; release workflows synchronize and verify it.
-BUNDLED_APP_VERSION = "1.4.0-beta.7"
+BUNDLED_APP_VERSION = "1.4.0"
 MOSE_VERSION = "0.1.0"
 
 
@@ -103,6 +109,8 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "postprocess_config_invalid": "自动后处理配置不完整。",
     "postprocess_failed": "转写已完成，但自动后处理失败。",
     "postprocess_cancelled": "自动后处理已取消，原始转写产物仍然保留。",
+    "waveform_unavailable": "Waveform data could not be embedded.",
+    "waveform_generation_failed": "Waveform project generation failed.",
 }
 
 
@@ -544,6 +552,7 @@ class LauncherApi:
             "providers": [_provider_payload(item, self.paths.env_path, config.model_cache_root) for item in PROVIDERS],
             "postprocessProviders": _postprocess_provider_payloads(self.paths.env_path),
             "postprocessAutoPlan": load_postprocess_plan(self.paths.env_path),
+            "zoomPercent": config.zoom_percent,
         }
 
     def default_output(self, payload: Mapping[str, object]) -> dict[str, object]:
@@ -605,12 +614,19 @@ class LauncherApi:
         if "s2tMode" in payload:
             mode = str(payload.get("s2tMode") or "off").strip().lower()
             updates["MAW_GUI_S2T_MODE"] = mode if mode in {"off", "taiwan", "standard"} else "off"
+        if "zoomPercent" in payload:
+            from maw.gui_config import normalize_zoom_percent
+
+            zoom_percent = normalize_zoom_percent(payload.get("zoomPercent"))
+            updates["MAW_GUI_ZOOM_PERCENT"] = str(zoom_percent)
+        else:
+            zoom_percent = effective_config(self.paths.env_path).zoom_percent
         if updates:
             try:
                 save_env(self.paths.env_path, updates)
             except (OSError, UnicodeError, ValueError) as error:
                 return _error_result("", "config_save_failed", f"{self.paths.env_path}: {error}")
-        return {"ok": True}
+        return {"ok": True, "zoomPercent": zoom_percent}
 
     def save_postprocess_settings(self, payload: Mapping[str, object]) -> dict[str, object]:
         preset = preset_by_id(str(payload.get("providerId") or "deepseek"))
@@ -756,6 +772,7 @@ class LauncherApi:
                     srt_path=_optional_path(payload.get("srtPath")),
                     output_mode=_output_mode(payload.get("outputMode")),
                     replacements=replacements,
+                    media_path=_optional_path(payload.get("mediaPath")),
                 )
             )
             self._emit_postprocess_status("toolbox_status_writing")
@@ -776,6 +793,7 @@ class LauncherApi:
                     srt_path=_optional_path(payload.get("srtPath")),
                     script_path=script_path,
                     output_mode=_output_mode(payload.get("outputMode")),
+                    media_path=_optional_path(payload.get("mediaPath")),
                 )
             )
             self._emit_postprocess_status("toolbox_status_writing")
@@ -811,6 +829,7 @@ class LauncherApi:
                 video_path=_optional_path(payload.get("videoPath")),
                 output_mode=_output_mode(payload.get("outputMode")),
                 fallback_video_path=_optional_path(payload.get("fallbackVideoPath")),
+                media_path=_optional_path(payload.get("mediaPath")),
                 region=_ocr_region(payload),
                 threshold=float(str(raw_threshold if raw_threshold is not None else "0.5")),
                 report=bool(payload.get("report")),
@@ -852,7 +871,7 @@ class LauncherApi:
             return {"ok": False, "field": "postprocessProvider", "code": "postprocess_failed", "detail": "LLM API URL and model are required.", "error": "LLM API URL and model are required."}
         batch_number = 0
 
-        def complete(prompt: str, cues: list[dict[str, str]]) -> dict[str, object]:
+        def complete(prompt: str, cues: list[dict[str, JsonValue]]) -> dict[str, JsonValue]:
             nonlocal batch_number
             batch_number += 1
             current_batch = batch_number
@@ -872,6 +891,7 @@ class LauncherApi:
                     operation=operation,
                     custom_prompt=custom_prompt,
                     task_prompt=(str(payload.get("taskPrompt") or "") if "taskPrompt" in payload else None),
+                    media_path=_optional_path(payload.get("mediaPath")),
                 ),
                 complete=complete,
                 on_status=self._emit_postprocess_status,
@@ -962,6 +982,12 @@ class LauncherApi:
             return {"ok": False, "error": f"File does not exist: {path}"}
         return _open_existing_path(path)
 
+    def open_containing_folder(self, payload: Mapping[str, object]) -> dict[str, object]:
+        path = Path(str(payload.get("path") or "").strip()).expanduser()
+        if not path.is_file():
+            return {"ok": False, "error": f"File does not exist: {path}"}
+        return _open_existing_path(path.resolve().parent)
+
     def open_mose(self, payload: Mapping[str, object]) -> dict[str, object]:
         """Open the packaged MOSE editor and pass it the selected project path."""
         project_text = str(payload.get("jsonPath") or "").strip()
@@ -1031,7 +1057,7 @@ class LauncherApi:
         except OSError as error:
             self._close_server_log()
             return _error_result("port", "server_start_failed", f"{url} | {error}")
-        if not _wait_for_server(url, timeout=5.0):
+        if not _wait_for_server(url, timeout=SERVER_START_TIMEOUT):
             exit_code = self.server_process.poll() if self.server_process else None
             if exit_code is not None:
                 detail = self._read_server_log()
@@ -1151,6 +1177,42 @@ class LauncherApi:
             "outputPath": str(request.srt_path),
             "outputRenamed": output_renamed,
             "rawPath": str(raw_response_path(request.srt_path)) if request.debug_raw else "",
+        }
+
+    def generate_waveform_project(self, payload: Mapping[str, object]) -> dict[str, object]:
+        """Create a media-only project containing embedded waveform caches."""
+        media_text = str(payload.get("mediaPath") or "").strip()
+        media_path = Path(media_text).expanduser().resolve() if media_text else None
+        if media_path is None or media_path.suffix.lower() not in MEDIA_EXTS or not media_path.is_file():
+            return _error_result("mediaPath", "media_not_found", media_text)
+
+        output_seed = unique_output_path(media_path.with_suffix(".waveform.srt"))
+        project_path = output_seed.with_suffix(".mosp")
+        project: dict[str, object] = {"media": str(media_path), "segments": []}
+        try:
+            cached = embed_media_caches(
+                project,
+                media_path,
+                source_media_path=media_path,
+                generate_spectral=bool(payload.get("generateSpectral")),
+            )
+            normalized = normalize_project(cached.project)
+            waveform = normalized.get("waveform")
+            if not is_waveform_payload(waveform) or int(waveform["peak_count"]) <= 0:
+                return _error_result("mediaPath", "waveform_unavailable", str(media_path))
+            project_path.write_bytes((json.dumps(normalized, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        except (OSError, TypeError, ValueError) as error:
+            return _error_result("mediaPath", "waveform_generation_failed", str(error))
+
+        warnings: list[str] = []
+        if cached.reapeaks_path is None:
+            warnings.append("ReaPeaks cache was not generated.")
+        return {
+            "ok": True,
+            "mediaPath": str(media_path),
+            "projectPath": str(project_path),
+            "warnings": warnings,
+            "reapeaksPath": str(cached.reapeaks_path) if cached.reapeaks_path else "",
         }
 
     def get_local_models(self, payload: Mapping[str, object] | None = None) -> dict[str, object]:
@@ -1425,6 +1487,7 @@ class LauncherApi:
                     srt_path=result.srt_path,
                     env_path=self.paths.env_path,
                     ffmpeg_path=_postprocess_ffmpeg(self.paths.env_path),
+                    ocr_runtime_root=self._ocr_runtime_status().path,
                     cancel_event=cancel_event,
                     on_event=self._handle_postprocess_pipeline_event,
                     llm_settings=request.postprocess_llm_settings,
@@ -1491,6 +1554,7 @@ class LauncherApi:
                 srt_path=Path(str(context.get("sourceSrtPath") or result.srt_path)),
                 env_path=self.paths.env_path,
                 ffmpeg_path=_postprocess_ffmpeg(self.paths.env_path),
+                ocr_runtime_root=self._ocr_runtime_status().path,
                 cancel_event=cancel_event,
                 on_event=self._handle_postprocess_pipeline_event,
                 llm_settings=context.get("llmSettings") if isinstance(context.get("llmSettings"), Mapping) else None,
@@ -1961,6 +2025,7 @@ def _request_from_payload(payload: Mapping[str, object], env_path: Path) -> Tran
         workspace_id=workspace_id,
         provider=provider.id,
         speaker_colors=bool(payload.get("speakerColors")) and model.supports_speaker,
+        generate_spectral=bool(payload.get("generateSpectral")),
         ui_language=_gui_lang(payload),
         generate_html=bool(payload.get("generateHtml")),
         debug_raw=bool(payload.get("debugRaw")),
@@ -2067,8 +2132,11 @@ def _postprocess_values(env_path: Path, prefix: str) -> dict[str, str]:
     from maw.gui_config import load_env
 
     values = load_env(env_path)
+    api_key = os.environ.get(f"{prefix}_API_KEY") or values.get(f"{prefix}_API_KEY", "")
+    if prefix == "MAW_POSTPROCESS_QWEN" and not api_key:
+        api_key = os.environ.get("DASHSCOPE_API_KEY") or values.get("DASHSCOPE_API_KEY", "")
     return {
-        "apiKey": os.environ.get(f"{prefix}_API_KEY") or values.get(f"{prefix}_API_KEY", ""),
+        "apiKey": api_key,
         "baseUrl": os.environ.get(f"{prefix}_BASE_URL") or values.get(f"{prefix}_BASE_URL", ""),
         "model": os.environ.get(f"{prefix}_MODEL") or values.get(f"{prefix}_MODEL", ""),
         "displayName": os.environ.get(f"{prefix}_DISPLAY_NAME") or values.get(f"{prefix}_DISPLAY_NAME", ""),
@@ -2127,6 +2195,8 @@ def _route_dropped_path(path: str) -> dict[str, object]:
         return {"type": "dropSubtitle", "path": path}
     if suffix == ".txt":
         return {"type": "dropHotwordFile", "path": path}
+    if suffix == ".ffconcat":
+        return {"type": "dropFfconcat", "path": path}
     if suffix in MEDIA_EXTS:
         return {"type": "dropMedia", "path": path}
     return {"type": "dropReject", "path": path}
