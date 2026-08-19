@@ -6044,7 +6044,7 @@ function commitMainWaveformSplit(state, { force = false, successMessage = '已�
   renderAll();
   selectOnly(mainIndex + 1);
   lastClickedIdx = mainIndex + 1;
-  update();
+  updateWithoutCueListAutoScroll();
   flashSplitFeedback({
     index: mainIndex,
     track: 'main',
@@ -6129,7 +6129,7 @@ function commitExtensionSplit(state, { force = false } = {}) {
   renderAll();
   selectOnlyExtension(extensionIndex + 1);
   lastClickedExtensionIdx = extensionIndex + 1;
-  update();
+  updateWithoutCueListAutoScroll();
   flashSplitFeedback({
     index: extensionIndex,
     track: 'extension',
@@ -6253,7 +6253,7 @@ function confirmLinkedSplit() {
   renderAll();
   selectOnly(mainIndex);
   lastClickedIdx = mainIndex;
-  update();
+  updateWithoutCueListAutoScroll();
   flashSplitFeedback({
     index: mainIndex,
     track: 'main',
@@ -6441,7 +6441,7 @@ function splitAtCursor(feedbackPoint = null, { listFeedback = true } = {}) {
       || waveformEditor?.getSplitPointAtTime?.(splitMs, 'main')
       || ninjaFeedbackPoint,
   );
-  update();
+  updateWithoutCueListAutoScroll();
   flashSplitFeedback({
     index: idx,
     track: 'main',
@@ -7125,7 +7125,7 @@ function cueListVisibleBounds() {
   return { containerRect, top, bottom: containerRect.bottom };
 }
 
-function scrollCueToCenter(cueEl) {
+function scrollCueToCenter(cueEl, { behavior = 'smooth' } = {}) {
   if (!cueEl || cueEl.classList.contains('hidden')) return;
   const { containerRect: cRect, top: visibleTop, bottom: visibleBottom } = cueListVisibleBounds();
   const eRect = cueEl.getBoundingClientRect();
@@ -7133,20 +7133,22 @@ function scrollCueToCenter(cueEl) {
   const comfortInset = Math.min(120, Math.max(48, visibleHeight * 0.2));
   // 目标已经处于列表中间的舒适区域时，不再制造一次多余的滚动动画。
   // 顶部从 sticky 工具栏底部开始计算，避免把字幕滚到工具栏下面。
+  const containerComfortTop = cRect.top + comfortInset;
+  const containerComfortBottom = cRect.bottom - comfortInset;
   if (
-    eRect.top >= visibleTop + comfortInset
-    && eRect.bottom <= visibleBottom - comfortInset
+    eRect.top >= containerComfortTop
+    && eRect.bottom <= containerComfortBottom
   ) return;
   const offsetTop = (eRect.top - cRect.top) + container.scrollTop;
   const visibleTopOffset = visibleTop - cRect.top;
   const target = offsetTop + eRect.height / 2 - visibleTopOffset - visibleHeight / 2;
-  container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  container.scrollTo({ top: Math.max(0, target), behavior });
 }
-function scrollCueIntoViewIfNeeded(cueEl) {
+function scrollCueIntoViewIfNeeded(cueEl, options) {
   if (!cueEl || cueEl.classList.contains('hidden')) return;
   const { top, bottom } = cueListVisibleBounds();
   const eRect = cueEl.getBoundingClientRect();
-  if (eRect.top < top || eRect.bottom > bottom) scrollCueToCenter(cueEl);
+  if (eRect.top < top || eRect.bottom > bottom) scrollCueToCenter(cueEl, options);
 }
 
 // === seek ===
@@ -7430,6 +7432,11 @@ function bindCueEvents(el, idx) {
     }
 
     const now = performance.now();
+    const listScrollBeforeClick = container.scrollTop;
+    const listCenterScroll = Math.max(
+      0,
+      el.offsetTop - container.clientHeight / 2 + el.offsetHeight / 2,
+    );
     const isSecondDoubleClick = e.detail > 1
       || (lastPrimaryPointerDownAt > 0 && now - lastPrimaryPointerDownAt < 500);
     lastPrimaryPointerDownAt = now;
@@ -7447,6 +7454,8 @@ function bindCueEvents(el, idx) {
       handled: true,
       suppressClick: action !== 'select',
       time: now,
+      preserveListScroll: listScrollBeforeClick > 0 && el.offsetTop < listScrollBeforeClick,
+      listScrollBeforeClick,
     };
   });
   el.addEventListener('pointermove', (e) => {
@@ -7476,17 +7485,22 @@ function bindCueEvents(el, idx) {
     if (!state?.handled) selectFromCuePointer(e);
 
     // 选择已经在 pointerdown 完成；这里仅处理列表滚动、波形定位和媒体 Seek。
-    if (EDITOR_SETTINGS.cueListAutoScrollOnClick) scrollCueToCenter(el);
+    if (EDITOR_SETTINGS.cueListAutoScrollOnClick && !state?.preserveListScroll) {
+      scrollCueToCenter(el);
+    }
     waveformEditor?.revealTime(DATA.segments[idx].start, true);
     if (EDITOR_SETTINGS.clickBehavior !== 'select-only') {
       // 默认只跳转不改动播放状态；“选中并跳转（自动播放）”会在暂停时启动播放。
       const previousSuppress = suppressCueListAutoScroll;
-      suppressCueListAutoScroll = !EDITOR_SETTINGS.cueListAutoScrollOnClick;
+      suppressCueListAutoScroll = state?.preserveListScroll
+        ? true : !EDITOR_SETTINGS.cueListAutoScrollOnClick;
       try {
         seekFromWaveform(DATA.segments[idx].start / 1000);
       } finally {
-        suppressCueListAutoScroll = previousSuppress;
+        suppressCueListAutoScroll = state?.preserveListScroll
+          ? true : previousSuppress;
       }
+      if (state?.preserveListScroll) container.scrollTop = state.listScrollBeforeClick;
       if (EDITOR_SETTINGS.clickBehavior === 'select-and-play' && player.paused) togglePlayback();
     }
   });
@@ -9622,7 +9636,9 @@ function updateActiveCue(idx) {
     const cur = container.querySelector(`.cue[data-idx="${idx}"]`);
     if (cur) {
       cur.classList.add('active');
-      if (!editingState && !suppressCueListAutoScroll) scrollCueIntoViewIfNeeded(cur);
+      if (!editingState && !suppressCueListAutoScroll) {
+        scrollCueIntoViewIfNeeded(cur, { behavior: 'auto' });
+      }
     }
   }
   lastActive = idx;
@@ -9689,6 +9705,22 @@ function update() {
   const idx = findActive(tMs);
   updateActiveCue(idx);
   refreshSubtitlePreview(tMs, idx);
+}
+
+// 拆分等结构性提交后的 update() 只刷新时间码与激活态，不触发播放跟随滚动。
+// renderAll 刚重建列表时，content-visibility 让视口外的行仍处于估算占位
+// 高度，updateActiveCue 量到的瞬态几何会把「活动行不在视口」误判成真，
+// 再用被污染的 offsetTop 算出错误目标平滑滚走（页面放大倍率越高、真实
+// 行高与估算差异越大越容易触发）。拆分后是否滚动、滚到哪里已由拆分
+// 来源显式决定（列表来源保持原位，波形来源显式居中新右半段）。
+function updateWithoutCueListAutoScroll() {
+  const previousSuppress = suppressCueListAutoScroll;
+  suppressCueListAutoScroll = true;
+  try {
+    update();
+  } finally {
+    suppressCueListAutoScroll = previousSuppress;
+  }
 }
 // === 表情包预览（视频画面内）===
 // 层位置/尺寸由 preview.sticker 几何驱动（默认右上角）；点击后可拖动/缩放，与字幕预览同一套交互。
@@ -10508,9 +10540,9 @@ function buildGapRemovedStickerOtio() {
   return result.json;
 }
 
-async function downloadFile(content, filename, mime, accept) {
+async function downloadFile(content, filename, mime, accept, { usePicker = true } = {}) {
   // 优先尝试 File System Access API（弹出保存路径选择对话框）
-  if (window.showSaveFilePicker) {
+  if (usePicker && window.showSaveFilePicker) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: filename,
@@ -10936,6 +10968,12 @@ function getSavedPresetWorkspaces() {
     ? SERVER_CONFIG.presetWorkspaces : {};
 }
 
+// 覆盖可能只存导航状态（后端自动创建），没有布局数据；只有含 navigation
+// 以外字段的覆盖才能作为布局来源，否则退回内置默认布局。
+function presetWorkspaceHasLayout(workspace) {
+  return Boolean(workspace) && Object.keys(workspace).some((key) => key !== 'navigation');
+}
+
 function currentWorkspaceDisplayName() {
   const selected = workspacePresetSelect?.selectedOptions?.[0];
   return selected?.textContent?.trim() || currentServerWorkspaceName || currentBuiltinWorkspaceName || '当前工作区';
@@ -11110,13 +11148,14 @@ async function applyWorkspaceSelection(preset) {
   currentServerWorkspaceName = '';
   currentBuiltinWorkspaceName = preset;
   const savedPreset = getSavedPresetWorkspaces()[preset];
-   if (savedPreset) waveformEditor.setLayoutData(savedPreset);
-   else waveformEditor.setLayout(preset);
+  const layoutPreset = presetWorkspaceHasLayout(savedPreset) ? savedPreset : null;
+  if (layoutPreset) waveformEditor.setLayoutData(layoutPreset);
+  else waveformEditor.setLayout(preset);
   applyEditorDisplaySettings(
     savedPreset?.editorDisplay || window.AsrWaveform?.builtinWorkspaces?.[preset]?.editorDisplay,
   );
-   workspacePresetSelect.value = preset;
-   restoreWorkspaceNavigation(savedPreset);
+  workspacePresetSelect.value = preset;
+  restoreWorkspaceNavigation(savedPreset);
   refreshWorkspaceSelect();
   syncWorkspaceControls();
   void updateServerWorkspaceSettings({ activeWorkspaceName: '' }).catch((error) => {
@@ -11136,7 +11175,7 @@ function configureServerWorkspaceLibrary() {
     ? savedSelection : DATA.workspace?.preset;
   currentBuiltinWorkspaceName = currentServerWorkspaceName ? ''
     : BUILTIN_WORKSPACE_IDS.includes(initialPreset) ? initialPreset : 'wave-right';
-  if (!savedSelection && currentBuiltinWorkspaceName && getSavedPresetWorkspaces()[currentBuiltinWorkspaceName]) {
+  if (!savedSelection && currentBuiltinWorkspaceName && presetWorkspaceHasLayout(getSavedPresetWorkspaces()[currentBuiltinWorkspaceName])) {
     waveformEditor.setLayoutData(getSavedPresetWorkspaces()[currentBuiltinWorkspaceName]);
     if (workspacePresetSelect) workspacePresetSelect.value = currentBuiltinWorkspaceName;
   }
@@ -11707,12 +11746,9 @@ async function createProjectCheckpoint(project, suggestedName) {
   }
   projectCheckpointInFlight = true;
   try {
-    if (!window.showSaveFilePicker) {
-      // 无原生保存对话框的浏览器：退化为普通下载（无句柄，后续保存走导出）。
-      const saved = await downloadFile(JSON.stringify(project, null, 2), suggestedName, 'application/json', {
-        desc: 'MOSE 工程文件', types: { 'application/json': ['.mosp', '.json'] },
-      });
-      if (!saved) return false;
+    if (!window.showSaveFilePicker || !navigator.userActivation?.isActive) {
+      // 检查点只用于确认后续导入可以继续；无用户手势时不能弹出保存对话框，
+      // 直接建立内存工程检查点，后续仍通过显式导出保存。
       applyCanonicalProject(project, suggestedName);
       detachServerProjectSaving();
       return true;
@@ -11731,6 +11767,25 @@ async function createProjectCheckpoint(project, suggestedName) {
     return true;
   } catch (error) {
     if (error && error.name === 'AbortError') return false;  // 用户取消保存对话框
+    if (error && (error.name === 'NotAllowedError' || error.name === 'SecurityError')) {
+      try {
+        const saved = await downloadFile(
+          JSON.stringify(project, null, 2),
+          suggestedName,
+          'application/json',
+          { desc: 'MOSE 工程文件', types: { 'application/json': ['.mosp', '.json'] } },
+          { usePicker: false },
+        );
+        if (saved) {
+          applyCanonicalProject(project, suggestedName);
+          detachServerProjectSaving();
+          return true;
+        }
+      } catch (fallbackError) {
+        flashHint(`创建工程失败：${fallbackError.message || fallbackError}`, 'warning');
+        return false;
+      }
+    }
     flashHint(`创建工程失败：${error.message || error}`, 'warning');
     return false;
   } finally {
@@ -11749,9 +11804,16 @@ function detachServerProjectSaving() {
   scheduleAutoSave();
 }
 
-async function ensureProjectCheckpointForImport(file) {
+async function ensureProjectCheckpointForImport(file, { usePicker = true } = {}) {
   if (projectCheckpointed) return true;
-  return createProjectCheckpoint(buildBlankProject(), suggestedProjectName(file));
+  if (usePicker && window.showSaveFilePicker) {
+    return createProjectCheckpoint(buildBlankProject(), suggestedProjectName(file));
+  }
+  // Drag/drop imports are asynchronous by the time they reach here; do not
+  // open a save picker as part of importing a subtitle.
+  applyCanonicalProject(buildBlankProject(), suggestedProjectName(file));
+  detachServerProjectSaving();
+  return true;
 }
 
 function isMawProject(data) {
@@ -11875,25 +11937,8 @@ function beginEditorLoading(label, progress = 0) {
 }
 
 async function readFileTextWithProgress(file) {
-  if (!file?.stream || !Number.isFinite(file.size) || file.size <= 0) {
-    updateEditorLoading(20, `正在读取 ${file?.name || '文件'}…`);
-    return file.text();
-  }
-  const reader = file.stream().getReader();
-  const chunks = [];
-  let loaded = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      chunks.push(next.value);
-      loaded += next.value.byteLength || 0;
-      updateEditorLoading(5 + (loaded / file.size) * 45, `正在读取 ${file.name}…`);
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-  return new Blob(chunks).text();
+  updateEditorLoading(20, `正在读取 ${file?.name || '文件'}…`);
+  return file.text();
 }
 
 async function parseSubtitleImportFile(file) {
@@ -12499,7 +12544,6 @@ async function loadReapeaksFile(file) {
     DATA.spectral = parsed.spectral;
     waveformEditor.setReapeaksWaveform(parsed.waveform);
     waveformEditor.setSpectralPayload(parsed.spectral);
-    waveformEditor.setPayload(null);
     waveformEditor.setMediaAvailable(false);
     flashHint(`已加载 ReaPeaks 缓存：${file.name}`, 'success');
     return true;
@@ -14118,7 +14162,7 @@ async function handleDroppedFiles(files) {
       return;
     }
   }
-  if ((mediaFile || srtFile) && !await ensureProjectCheckpointForImport(mediaFile || srtFile)) return;
+  if ((mediaFile || srtFile) && !await ensureProjectCheckpointForImport(mediaFile || srtFile, { usePicker: false })) return;
   if (mediaFile) {
     const imported = await loadMediaFile(mediaFile);
     if (imported) projectImportDirty = true;
@@ -14126,8 +14170,6 @@ async function handleDroppedFiles(files) {
   if (reapeaksFile) await loadReapeaksFile(reapeaksFile);
   if (srtFile) {
     if (DATA.segments.length > 0) {
-      if (hasUnsavedProjectChanges()
-          && !confirm('当前有未保存的改动，是否继续导入为字幕来源？')) return;
       try {
         const segments = await parseSubtitleImportFile(srtFile);
         await showMultiSubtitleImportChoice(srtFile, segments);

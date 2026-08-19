@@ -4,8 +4,8 @@
 
 ## [Unreleased]
 
-- Launcher toolbox now supports generating an embedded-waveform media-only `.mosp` project without transcription, with scoped optional spectral data plus separate generate-only and generate-and-open-editor actions.
-- Launcher toolbox now uses primary Post-processing and Utilities tabs, including an independent Utilities media input that follows the main Launcher media until overridden.
+- Launcher 现支持批量转写：可一次加入多个音频或视频文件，按顺序执行转写，并为每个文件生成独立的 SRT、`.mosp`
+- 固定处理扩展为按序批量替换，并增加本地简繁转换（转为简体 / 转为繁体）
 
 ## [1.4.0] - 2026-08-16
 

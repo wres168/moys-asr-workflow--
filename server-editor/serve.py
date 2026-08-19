@@ -634,7 +634,11 @@ class EditorServer(ThreadingHTTPServer):
             raise ValueError("不是可保存的内置工作区")
         with self.settings_lock:
             workspaces = copy.deepcopy(self.settings.preset_workspaces)
+            existing = workspaces.get(preset, {})
+            preserved_nav = existing.get("navigation") if isinstance(existing, dict) else None
             workspaces[preset] = copy.deepcopy(workspace)
+            if preserved_nav is not None and isinstance(workspaces[preset], dict):
+                workspaces[preset]["navigation"] = preserved_nav
             self.settings = replace(self.settings, preset_workspaces=workspaces, active_workspace_name="")
             self.persist_settings()
 
@@ -670,9 +674,11 @@ class EditorServer(ThreadingHTTPServer):
                 workspaces = copy.deepcopy(self.settings.saved_workspaces)
             else:
                 assert preset is not None
-                if preset not in self.settings.preset_workspaces:
+                if preset not in BUILTIN_WORKSPACE_IDS:
                     raise ValueError("内置工作区覆盖不存在")
                 workspaces = copy.deepcopy(self.settings.preset_workspaces)
+                if preset not in workspaces:
+                    workspaces[preset] = {}
             workspace = workspaces[name if name is not None else preset]
             current_navigation = workspace.get("navigation", {})
             if not isinstance(current_navigation, dict):
@@ -693,21 +699,22 @@ class EditorServer(ThreadingHTTPServer):
             known = next((item for item in self.settings.recent_projects if item.path == candidate), None)
             if not known:
                 raise RecentProjectError("该工程不在本机最近打开记录中")
-            project = load_project(
-                known.path,
-                None,
-                self.stickers_dir,
-                no_waveform=self.no_waveform,
-                load_reapeaks=not self.defer_reapeaks,
-                peaks_per_second=self.peaks_per_second,
-            )
-            if self.defer_reapeaks:
-                project = without_deferred_reapeaks(project)
+        project = load_project(
+            known.path,
+            None,
+            self.stickers_dir,
+            no_waveform=self.no_waveform,
+            load_reapeaks=not self.defer_reapeaks,
+            peaks_per_second=self.peaks_per_second,
+        )
+        if self.defer_reapeaks:
+            project = without_deferred_reapeaks(project)
+        with self.settings_lock:
             self.project = project
             self.settings = remember_project(self.settings, project.json_path)
             self.persist_settings()
-            self.start_deferred_reapeaks_load()
-            return project
+        self.start_deferred_reapeaks_load()
+        return project
 
     def attach_project(self, file_name: str, browser_project: dict) -> ServerProject:
         """Bind a project opened through the browser to its on-disk file.
@@ -1349,7 +1356,7 @@ def main() -> int:
     parser.add_argument("-m", "--media", help="媒体文件路径（默认按 JSON.media / 同目录探测）")
     parser.add_argument("-s", "--stickers", help="表情包目录（默认读取 .env 的 STICKER_DIR）")
     parser.add_argument("--blank", action="store_true", help="启动空白编辑器，之后在页面中选择 JSON 与媒体")
-    parser.add_argument("--port", type=int, default=8250, help="监听端口（默认 8250，0=自动选择）")
+    parser.add_argument("-p", "--port", type=int, default=8250, help="监听端口（默认 8250，0=自动选择）")
     parser.add_argument("--no-open", action="store_true", help="只启动服务，不自动打开浏览器")
     parser.add_argument("--no-waveform", action="store_true", help="跳过 ffmpeg 波形预计算")
     parser.add_argument(

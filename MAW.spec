@@ -3,6 +3,11 @@
 import sys
 from pathlib import Path
 
+try:
+    from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+except ImportError:  # pragma: no cover - only reached outside a PyInstaller build
+    collect_data_files = lambda _package: []
+    collect_submodules = lambda _package: []
 
 ROOT = Path(SPECPATH).resolve()
 
@@ -74,6 +79,9 @@ datas = [
     (str(ROOT / "maw" / "project_preview.py"), "ocr-runtime/maw"),
     (str(ROOT / "maw" / "ocr_runtime_worker.py"), "ocr-runtime/maw"),
 ]
+opencc_datas = collect_data_files("opencc")
+datas.extend(opencc_datas)
+opencc_hiddenimports = collect_submodules("opencc")
 
 # OCR dependencies and model files stay outside the frozen bundle. The bundled
 # worker only bootstraps the optional runtime when the user installs it.
@@ -119,6 +127,7 @@ a = Analysis(
         "maw.ocr_runtime",
         "maw.cli",
         "maw.postprocess",
+        "maw.text_conversion",
         "maw.postprocess_io",
         "maw.postprocess_llm",
         "maw.postprocess_ffmpeg",
@@ -127,6 +136,8 @@ a = Analysis(
         "maw.project",
         "maw.soniox",
         "maw.bcut",
+        "opencc",
+        *opencc_hiddenimports,
         "numpy",
         "opencc",
         *opencc_hiddenimports,

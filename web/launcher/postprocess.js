@@ -26,6 +26,7 @@
   const AUTO_LLM_OPERATIONS = { proofread: "proofread", resegment: "resegment" };
   let autoPlanSaveTimer = 0;
   let pendingAutoStep = "";
+  let toolboxOpenMode = "manual";
   let busy = false;
   let inputManual = false;
   let utilityMediaManual = false;
@@ -37,6 +38,7 @@
   let llmPrompts = {};
   let activeLlmOperation = "";
   let artifactMenuTarget = null;
+  let batchMode = false;
 
   function t(key) {
     return window.MAWLauncher.translate(key);
@@ -121,7 +123,7 @@
       retainIntermediate: false,
       steps: [
         { id: "match", enabled: false, scriptPath: "" },
-        { id: "replace", enabled: false, replacements: [] },
+        { id: "replace", enabled: false, replacements: [], conversion: "off" },
         { id: "proofread", enabled: false, providerId: "deepseek", customPrompt: "" },
         { id: "resegment", enabled: false, providerId: "deepseek", customPrompt: "" },
         { id: "ocr", enabled: false, videoPath: "", regionMode: "full", regionX1: 0, regionY1: 0, regionX2: 100, regionY2: 100, threshold: 0.5, report: false },
@@ -321,7 +323,13 @@
     const wasOpen = !$("toolboxDrawer").classList.contains("hidden");
     $("toolboxDrawer").classList.toggle("hidden", !open);
     $("toolboxFab").setAttribute("aria-expanded", String(open));
+    if (!open) toolboxOpenMode = "manual";
     syncPaths();
+    if (open) {
+      const activeTab = activeToolboxView().querySelector(".toolbox-tab.active")
+        || activeToolboxView().querySelector(".toolbox-tab");
+      if (activeTab) selectTool(activeTab.dataset.tool);
+    }
     if (open) $("toolboxClose").focus();
     if (!open && wasOpen) $("toolboxFab").focus();
   }
@@ -363,11 +371,13 @@
     });
     Object.entries(panels).forEach(([name, id]) => $(id).classList.toggle("hidden", name !== tool));
     document.querySelectorAll("[data-tool-action]").forEach((action) => {
-      action.classList.toggle("hidden", action.dataset.toolAction !== tool);
+      action.classList.toggle("hidden", action.dataset.toolAction !== tool || toolboxOpenMode === "auto-config");
     });
     $("toolboxInputDropZone").classList.toggle("hidden", section !== "postprocess");
     $("toolboxChain").classList.toggle("hidden", section !== "postprocess" || !$("toolboxChainList").children.length);
-    $("toolboxOutputField").classList.toggle("hidden", section !== "postprocess");
+    const configOnly = toolboxOpenMode === "auto-config";
+    $("toolboxOutputField").classList.toggle("hidden", section !== "postprocess" || configOnly);
+    $("toolboxConfigOnlyHint")?.classList.toggle("hidden", !configOnly);
   }
 
   function moveToolFocus(event) {
@@ -553,10 +563,11 @@
   function setBusy(nextBusy, statusKey = "toolbox_running") {
     busy = nextBusy;
     $("toolboxProgress").classList.toggle("hidden", !busy);
-    ["generateWaveform", "runWaveform", "toolboxGenerateSpectral", "runScriptMatch", "runOcrDedup", "runLlmPostprocess", "runFixedReplacement", "runFfconcatRebuild", "saveLlmSettings", "testLlmConnection", "getLlmModels", "toolboxInputPath", "pickToolboxInput", "toolboxUtilityMediaPath", "pickToolboxUtilityMedia", "postprocessProvider", "llmProvider", "llmApiKey", "llmBaseUrl", "llmModel", "llmModelChoicesToggle", "llmReasoningMode", "llmCustomDisplayName", "ocrModel", "openOcrSettings", "ocrVideoPath", "pickOcrVideo", "ocrRegionMode", "ocrRegionX1", "ocrRegionY1", "ocrRegionX2", "ocrRegionY2", "ocrThreshold", "ocrReport"].forEach((id) => {
+    ["generateWaveform", "runWaveform", "toolboxGenerateSpectral", "runScriptMatch", "runOcrDedup", "runLlmPostprocess", "runFixedProcess", "runFfconcatRebuild", "saveLlmSettings", "testLlmConnection", "getLlmModels", "toolboxInputPath", "pickToolboxInput", "toolboxUtilityMediaPath", "pickToolboxUtilityMedia", "postprocessProvider", "llmProvider", "llmApiKey", "llmBaseUrl", "llmModel", "llmModelChoicesToggle", "llmReasoningMode", "llmCustomDisplayName", "ocrModel", "openOcrSettings", "ocrVideoPath", "pickOcrVideo", "ocrRegionMode", "ocrRegionX1", "ocrRegionY1", "ocrRegionX2", "ocrRegionY2", "ocrThreshold", "ocrReport", "postprocessConversion"].forEach((id) => {
       $(id).disabled = busy;
     });
     renderOcrModel();
+    applyBatchModeLocks();
     if (busy) setModelChoicesOpen(false);
     if (busy) setResult(t(statusKey));
   }
@@ -628,7 +639,7 @@
   function chainLabel(kind, operation = "") {
     if (kind === "match") return t("toolbox_chain_match");
     if (kind === "ocr") return t("toolbox_chain_ocr");
-    if (kind === "replace") return t("toolbox_chain_replace");
+    if (kind === "fixed" || kind === "replace") return t("toolbox_chain_replace");
     const operationKeys = {
       proofread: "toolbox_chain_llm_proofread",
       resegment: "toolbox_chain_llm_resegment",
@@ -789,12 +800,15 @@
 
   function autoStepHint(stepId) {
     if (stepId === "match") {
+      if (batchMode) return t("batch_manuscript_disabled");
       const path = $("postprocessScriptPath").value.trim();
       return path ? fileName(path) : t("auto_step_hint_no_file");
     }
     if (stepId === "replace") {
       const count = parseReplacements().length;
-      return count ? t("auto_step_hint_rules").replace("{count}", String(count)) : t("auto_step_hint_no_rules");
+      const rules = count ? t("auto_step_hint_rules").replace("{count}", String(count)) : t("auto_step_hint_no_rules");
+      const conversion = $("postprocessConversion").value;
+      return conversion === "off" ? rules : `${rules} · ${t(`toolbox_conversion_${conversion}`)}`;
     }
     if (["proofread", "resegment", "translate"].includes(stepId)) {
       const operation = autoLlmOperation(stepId);
@@ -815,8 +829,9 @@
       enabled: Boolean($("autoPostprocessEnabled")?.checked),
       retainIntermediate: Boolean($("autoPostprocessRetain")?.checked),
       steps: [
+        // 始终上报用户的单文件勾选；批量运行由后端统一跳过文稿匹配，前端不改写、不持久化批量态。
         { id: "match", enabled: Boolean($("autoStepMatch")?.checked), scriptPath: $("postprocessScriptPath").value.trim() },
-        { id: "replace", enabled: Boolean($("autoStepReplace")?.checked), replacements: parseReplacements() },
+        { id: "replace", enabled: Boolean($("autoStepReplace")?.checked), replacements: parseReplacements(), conversion: $("postprocessConversion").value },
         { id: "proofread", enabled: Boolean($("autoStepProofread")?.checked), providerId, customPrompt: getLlmPrompt("proofread") },
         { id: "resegment", enabled: Boolean($("autoStepResegment")?.checked), providerId, customPrompt: getLlmPrompt("resegment") },
         { id: "ocr", enabled: Boolean($("autoStepOcr")?.checked), videoPath: $("ocrVideoPath").value.trim(), ...ocr, threshold: Number($("ocrThreshold").value), report: Boolean($("ocrReport").checked) },
@@ -835,7 +850,7 @@
       const path = $("postprocessScriptPath").value.trim();
       return Boolean(path && SCRIPT_EXTS.has(extension(path)));
     }
-    if (stepId === "replace") return parseReplacements().length > 0;
+    if (stepId === "replace") return parseReplacements().length > 0 || $("postprocessConversion").value !== "off";
     if (["proofread", "resegment", "translate"].includes(stepId)) return autoLlmReady($("postprocessProvider").value);
     if (stepId === "ocr") {
       const config = window.MAWLauncher.config || {};
@@ -867,20 +882,27 @@
       const status = $(`autoStep${stepId[0].toUpperCase()}${stepId.slice(1)}Status`);
       const row = document.querySelector(`[data-auto-step-row="${stepId}"]`);
       const enabled = Boolean(checkbox?.checked);
+      const available = stepId !== "match" || !batchMode;
+      if (stepId === "match" && batchMode && checkbox) {
+        checkbox.disabled = true;
+      } else if (stepId === "match" && checkbox) {
+        checkbox.disabled = false;
+      }
       const ready = autoStepReady(stepId);
-      if (enabled) selected.push(stepId);
-      if (enabled && !ready) invalid.push(stepId);
+      if (enabled && available) selected.push(stepId);
+      if (enabled && available && !ready) invalid.push(stepId);
       if (status) {
-        status.textContent = enabled ? t(ready ? "auto_status_ready" : "auto_status_config") : t("auto_status_disabled");
-        status.classList.toggle("ready", enabled && ready);
-        status.classList.toggle("invalid", enabled && !ready);
+        status.textContent = available && enabled ? t(ready ? "auto_status_ready" : "auto_status_config") : t("auto_status_disabled");
+        status.classList.toggle("ready", available && enabled && ready);
+        status.classList.toggle("invalid", available && enabled && !ready);
       }
       const hint = $(`autoStep${stepId[0].toUpperCase()}${stepId.slice(1)}Hint`);
       if (hint) {
         hint.textContent = autoStepHint(stepId);
         hint.title = hint.textContent;
       }
-      row?.classList.toggle("needs-config", enabled && !ready);
+      row?.classList.toggle("needs-config", available && enabled && !ready);
+      row?.classList.toggle("batch-unavailable", !available);
     });
     const enabled = Boolean($("autoPostprocessEnabled")?.checked);
     $("autoPostprocessOptions")?.classList.toggle("hidden", !enabled);
@@ -930,7 +952,7 @@
 
   function autoStepFocusField(stepId) {
     if (stepId === "match") return "postprocessScriptPath";
-    if (stepId === "replace") return "postprocessReplacements";
+    if (stepId === "replace") return parseReplacements().length ? "postprocessConversion" : "postprocessReplacements";
     if (["proofread", "resegment", "translate"].includes(stepId)) return "postprocessPrompt";
     if (stepId !== "ocr") return "";
     const video = $("ocrVideoPath").value.trim() || autoOcrVideoPath();
@@ -958,6 +980,7 @@
       window.MAWLauncher.openSettings("llmSettingsSection", focusId);
       return;
     }
+    toolboxOpenMode = "auto-config";
     setOpen(true);
     selectTool(AUTO_STEP_TOOLS[stepId] || "match");
     setAutoStepsExpanded(true);
@@ -988,6 +1011,7 @@
     $("postprocessScriptPath").value = String(match.scriptPath || "");
     const replace = byId.get("replace") || {};
     $("postprocessReplacements").value = (Array.isArray(replace.replacements) ? replace.replacements : []).map((item) => `${item.source || ""} => ${item.target || ""}`).join("\n");
+    $("postprocessConversion").value = ["to_simplified", "to_traditional"].includes(replace.conversion) ? replace.conversion : "off";
     ["proofread", "resegment"].forEach((stepId) => {
       const prompt = byId.get(stepId)?.customPrompt;
       if (typeof prompt === "string" && prompt) llmPrompts[autoLlmOperation(stepId)] = prompt;
@@ -1245,11 +1269,12 @@
     }
   }
 
-  async function runReplacement() {
+  async function runFixedProcess() {
     const paths = resolveInputPaths();
     if (!paths) return;
     const replacements = parseReplacements();
-    if (!replacements.length) {
+    const conversion = $("postprocessConversion").value;
+    if (!replacements.length && conversion === "off") {
       setFieldError("postprocessReplacements", t("toolbox_need_rules"));
       setResult(t("toolbox_need_rules"), "error");
       return;
@@ -1257,8 +1282,8 @@
     setFieldError("postprocessReplacements", "");
     setBusy(true, "toolbox_status_starting");
     try {
-      const result = await bridge("run_fixed_replacement", { ...paths, replacements });
-      if (result.ok) applySubtitleResult(result, { kind: "replace" });
+      const result = await bridge("run_fixed_process", { ...paths, replacements, conversion });
+      if (result.ok) applySubtitleResult(result, { kind: "fixed" });
       else setResult(result.error || result.detail || t("failed"), "error");
     } finally {
       setBusy(false);
@@ -1311,7 +1336,10 @@
     initializeAutoPostprocess();
   }
 
-  $("toolboxFab").addEventListener("click", () => setOpen($("toolboxDrawer").classList.contains("hidden")));
+  $("toolboxFab").addEventListener("click", () => {
+    toolboxOpenMode = "manual";
+    setOpen($("toolboxDrawer").classList.contains("hidden"));
+  });
   $("toolboxClose").addEventListener("click", () => setOpen(false));
   $("toolboxDrawer").addEventListener("wheel", (event) => {
     event.stopPropagation();
@@ -1352,7 +1380,7 @@
   $("ocrModel").addEventListener("change", renderOcrModel);
   $("openOcrSettings").addEventListener("click", () => window.MAWLauncher.openSettings("ocrSettingsSection"));
   $("runLlmPostprocess").addEventListener("click", runLlm);
-  $("runFixedReplacement").addEventListener("click", runReplacement);
+  $("runFixedProcess").addEventListener("click", runFixedProcess);
   $("runFfconcatRebuild").addEventListener("click", runFfconcat);
   $("pickPostprocessFfconcat").addEventListener("click", async () => {
     const result = await bridge("choose_file", { kind: "ffconcat" });
@@ -1447,6 +1475,7 @@
     $(id).addEventListener("change", () => setFieldError(id, ""));
   });
   $("postprocessReplacements").addEventListener("input", () => { setFieldError("postprocessReplacements", ""); renderAutoPostprocessState(); maybeEnablePendingAutoStep(); persistAutoPlanSoon(); });
+  $("postprocessConversion").addEventListener("change", () => { setFieldError("postprocessReplacements", ""); renderAutoPostprocessState(); maybeEnablePendingAutoStep(); persistAutoPlanSoon(); });
   $("ocrVideoPath").addEventListener("input", () => { ocrVideoManual = Boolean($("ocrVideoPath").value.trim()); setFieldError("ocrVideoPath", ""); renderAutoPostprocessState(); maybeEnablePendingAutoStep(); persistAutoPlanSoon(); });
   ["ocrRegionMode", "ocrRegionX1", "ocrRegionY1", "ocrRegionX2", "ocrRegionY2", "ocrThreshold", "ocrReport", "autoTranslateTarget"].forEach((id) => {
     $(id).addEventListener("input", () => { renderAutoPostprocessState(); maybeEnablePendingAutoStep(); persistAutoPlanSoon(); });
@@ -1505,6 +1534,18 @@
   window.MAWLauncher.getAutoPostprocessPayload = autoPlanFromControls;
   window.MAWLauncher.onLanguageChanged = () => {
     document.querySelectorAll(".toolbox-chain-file").forEach(renderArtifactButton);
+    renderAutoPostprocessState();
+  };
+  function applyBatchModeLocks() {
+    $("toolboxMatchTab").disabled = batchMode;
+    $("runScriptMatch").disabled = batchMode || busy;
+    $("configureAutoMatch").disabled = batchMode;
+  }
+  window.MAWLauncher.onBatchModeChanged = (active) => {
+    batchMode = Boolean(active);
+    applyBatchModeLocks();
+    if (batchMode && $("toolboxMatchTab").classList.contains("active")) selectTool("replace");
+    renderAutoPostprocessState();
   };
   window.MAWLauncher.openAutoPostprocessStep = openAutoStep;
   window.MAWLauncher.onOcrRuntimeChanged = () => {
